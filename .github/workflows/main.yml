@@ -1,91 +1,109 @@
-name: NDCe Windows Dependency Validation (GitHub Runner)
+name: Windows MSI Dependency Validation (GitHub Runner)
 
 on:
   workflow_dispatch:
 
 jobs:
-  ndce-deps-check:
+  msi-deps-check:
     runs-on: windows-latest
 
     steps:
-      # 1. Checkout automation repository
+      # 1. Checkout repository (automation repo)
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Download NDCe / Builder package from JFrog
-      - name: Download NDCe Builder from JFrog
+      # 2. Download MSI package (inside CAB) from JFrog
+      - name: Download Windows MSI package from JFrog
         shell: cmd
         run: |
-          echo === Downloading NDCe Builder CAB ===
+          echo === Downloading MSI CAB package ===
           curl -u ${{ secrets.JFROG_USER }}:${{ secrets.JFROG_TOKEN }} ^
             -O https://ncratleos.jfrog.io/artifactory/atmclient-maven-releases/NDCEBuilder/Released/Components/NDCE-Builder/03.03.00/NDCE-Builder-03.03.00.cab
           dir
 
-      # 3. Install 7-Zip (required to extract CAB)
+      # 3. Install 7-Zip (CAB extraction dependency)
       - name: Install 7-Zip
         shell: cmd
         run: |
           choco install 7zip -y
 
-      # 4. Extract CAB file
+      # 4. Extract CAB to access MSI
       - name: Extract CAB file
         shell: cmd
         run: |
           "C:\Program Files\7-Zip\7z.exe" x NDCE-Builder-03.03.00.cab -oextracted
           dir extracted
 
-      # 5. Install MSI silently and validate core artifacts
-      - name: Install NDCe Builder MSI and validate install
+      # 5. Install MSI silently and validate Windows artifacts
+      - name: Install MSI and validate installation
         shell: pwsh
         run: |
-          Write-Host "=== Searching for MSI ==="
-          $msi = Get-ChildItem extracted -Recurse -Filter *.msi | Select-Object -First 1
+          Write-Host "=== Searching for MSI installer ==="
 
+          $msi = Get-ChildItem extracted -Recurse -Filter *.msi | Select-Object -First 1
           if (-not $msi) {
-            Write-Host "❌ MSI not found"
+            Write-Host "❌ MSI file not found"
             exit 1
           }
 
           Write-Host "✅ Found MSI at $($msi.FullName)"
+
           Start-Process msiexec `
             -ArgumentList "/i `"$($msi.FullName)`" /qn /l*v install.log" `
             -Wait
 
-          Write-Host "=== MSI install log ==="
+          Write-Host "=== MSI installation log ==="
           Get-Content install.log
 
           $installPath = "C:\Program Files\NCR\NDCe Builder"
-
           if (-not (Test-Path $installPath)) {
-            Write-Host "❌ Install directory missing"
+            Write-Host "❌ Installation directory missing"
             exit 1
           }
 
-          Write-Host "✅ Install directory exists"
+          Write-Host "✅ Installation directory exists"
 
           $batFile = Join-Path $installPath "builderstartup.bat"
-
           if (-not (Test-Path $batFile)) {
             Write-Host "❌ builderstartup.bat missing"
             exit 1
           }
 
           Write-Host "✅ builderstartup.bat exists"
-          Write-Host "=== Windows application dependency validation PASSED ==="
+          Write-Host "=== MSI dependency validation PASSED ==="
 
-      # 6. Setup Python for automation tooling
+      # 6. Setup Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 7. Setup Node.js (required for Robot Browser / Playwright)
+      # 7. Verify Python installation
+      - name: Verify Python
+        shell: cmd
+        run: |
+          echo === Python ===
+          python --version
+          where python
+          pip --version
+
+      # 8. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # 8. Install Robot Framework dependencies (NO test execution)
+      # 9. Verify Node.js and npm
+      - name: Verify Node.js and npm
+        shell: cmd
+        run: |
+          echo === Node ===
+          node --version
+          where node
+          echo === npm ===
+          npm --version
+
+      # 10. Install Robot Framework dependencies (NO test execution)
       - name: Install Robot Framework dependencies
         shell: cmd
         run: |
@@ -93,9 +111,18 @@ jobs:
           pip install robotframework robotframework-browser allure-robotframework
           rfbrowser init
 
-      # 9. Install Google Chrome (browser dependency only)
+      # 11. Verify Robot Framework installation
+      - name: Verify Robot Framework
+        shell: cmd
+        run: |
+          echo === Robot Framework ===
+          python -m robot --version
+          pip show robotframework-browser
+
+      # 12. Install Google Chrome (browser dependency only)
       - name: Install Google Chrome
         shell: cmd
         run: |
           choco install googlechrome -y
+          echo === Chrome ===
           chrome --version
