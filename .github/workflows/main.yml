@@ -1,0 +1,101 @@
+name: NDCe Windows Dependency Validation (GitHub Runner)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ndce-deps-check:
+    runs-on: windows-latest
+
+    steps:
+      # 1. Checkout automation repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Download NDCe / Builder package from JFrog
+      - name: Download NDCe Builder from JFrog
+        shell: cmd
+        run: |
+          echo === Downloading NDCe Builder CAB ===
+          curl -u ${{ secrets.JFROG_USER }}:${{ secrets.JFROG_TOKEN }} ^
+            -O https://ncratleos.jfrog.io/artifactory/atmclient-maven-releases/NDCEBuilder/Released/Components/NDCE-Builder/03.03.00/NDCE-Builder-03.03.00.cab
+          dir
+
+      # 3. Install 7-Zip (required to extract CAB)
+      - name: Install 7-Zip
+        shell: cmd
+        run: |
+          choco install 7zip -y
+
+      # 4. Extract CAB file
+      - name: Extract CAB file
+        shell: cmd
+        run: |
+          "C:\Program Files\7-Zip\7z.exe" x NDCE-Builder-03.03.00.cab -oextracted
+          dir extracted
+
+      # 5. Install MSI silently and validate core artifacts
+      - name: Install NDCe Builder MSI and validate install
+        shell: pwsh
+        run: |
+          Write-Host "=== Searching for MSI ==="
+          $msi = Get-ChildItem extracted -Recurse -Filter *.msi | Select-Object -First 1
+
+          if (-not $msi) {
+            Write-Host "❌ MSI not found"
+            exit 1
+          }
+
+          Write-Host "✅ Found MSI at $($msi.FullName)"
+          Start-Process msiexec `
+            -ArgumentList "/i `"$($msi.FullName)`" /qn /l*v install.log" `
+            -Wait
+
+          Write-Host "=== MSI install log ==="
+          Get-Content install.log
+
+          $installPath = "C:\Program Files\NCR\NDCe Builder"
+
+          if (-not (Test-Path $installPath)) {
+            Write-Host "❌ Install directory missing"
+            exit 1
+          }
+
+          Write-Host "✅ Install directory exists"
+
+          $batFile = Join-Path $installPath "builderstartup.bat"
+
+          if (-not (Test-Path $batFile)) {
+            Write-Host "❌ builderstartup.bat missing"
+            exit 1
+          }
+
+          Write-Host "✅ builderstartup.bat exists"
+          Write-Host "=== Windows application dependency validation PASSED ==="
+
+      # 6. Setup Python for automation tooling
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 7. Setup Node.js (required for Robot Browser / Playwright)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 8. Install Robot Framework dependencies (NO test execution)
+      - name: Install Robot Framework dependencies
+        shell: cmd
+        run: |
+          python -m pip install --upgrade pip
+          pip install robotframework robotframework-browser allure-robotframework
+          rfbrowser init
+
+      # 9. Install Google Chrome (browser dependency only)
+      - name: Install Google Chrome
+        shell: cmd
+        run: |
+          choco install googlechrome -y
+          chrome --version
