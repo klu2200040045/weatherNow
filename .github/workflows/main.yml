@@ -1,93 +1,36 @@
 name: Builder Automation Tests
- 
 
 on:
   workflow_dispatch:
- 
+
 jobs:
   test:
     runs-on: windows-latest
+
     steps:
+      # 1. Checkout repository
       - name: Checkout code
         uses: actions/checkout@v4
- 
-      - name: Download MSI from JFrog
-        run: |
-          echo "=== Starting MSI download from JFrog ==="
-          curl -u ${{ secrets.JFROG_USER }}:${{ secrets.JFROG_TOKEN }} -O "https://ncratleos.jfrog.io/artifactory/atmclient-maven-releases/NDCEBuilder/Released/Components/NDCE-Builder/03.03.00/NDCE-Builder-03.03.00.cab%22
-          echo "=== Download complete. Listing current directory ==="
-          dir
-        shell: cmd
- 
-      - name: Download 7-Zip
-        run: |
-          choco install 7zip -y
-        shell: cmd
- 
-      - name: Extract CAB file
-        run: |
-          echo "=== Extracting CAB file with 7-Zip ==="
-          "C:\Program Files\7-Zip\7z.exe" x NDCE-Builder-03.03.00.cab -oextracted
-          dir extracted
-        shell: cmd
- 
-      - name: List extracted files
-        run: |
-          dir extracted
-        shell: cmd
- 
-      - name: Install Web Application MSI and Log Details
-        run: |
-          Write-Host "=== Installing MSI ==="
-          $msi = Get-ChildItem -Path extracted -Recurse -Filter NDCe_Builder_Setup.msi | Select-Object -First 1
-          if ($msi) {
-            Write-Host "Found MSI at $($msi.FullName)"
-            $process = Start-Process msiexec -ArgumentList "/i `"$($msi.FullName)`" /qn /l*v install.log" -Wait -PassThru
-            Write-Host "MSI install exited with code $($process.ExitCode)"
-            Get-Content install.log
-          } else {
-            Write-Host "MSI not found!"
-            exit 1
-          }
-          Write-Host "=== MSI installation complete ==="
-          $installPath = "C:\Program Files\NCR\NDCe Builder"
-          Write-Host "=== Checking install directory: $installPath ==="
-          if (Test-Path "$installPath") {
-            Write-Host "Install directory exists. Listing contents:"
-            Get-ChildItem "$installPath"
-          } else {
-            Write-Host "Install directory NOT found!"
-            exit 1
-          }
-          $batFile = Join-Path $installPath "builderstartup.bat"
-          Write-Host "=== Checking for builderstartup.bat at $batFile ==="
-          if (Test-Path $batFile) {
-            Write-Host "builderstartup.bat found."
-          } else {
-            Write-Host "builderstartup.bat NOT found!"
-            exit 1
-          }
-          Write-Host "=== Starting app service (if needed) ==="
-          try {
-            Start-Service "YourAppService"
-            Write-Host "Service started."
-          } catch {
-            Write-Host "Service not found or could not be started. Skipping."
-          }
-          Start-Sleep -Seconds 30
-        shell: pwsh
- 
+
+      # ─────────────────────────────────────
+      # TOOLING & AUTOMATION DEPENDENCIES FIRST
+      # ─────────────────────────────────────
+
+      # 2. Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
- 
+
+      # 3. Setup Node.js
       - name: Install Node.js (npm)
         uses: actions/setup-node@v4
         with:
           node-version: '20'
- 
+
+      # 4. Verify Node.js and npm
       - name: Check Node.js and npm Installation
+        shell: cmd
         run: |
           echo "=== Checking Node.js installation ==="
           node --version
@@ -95,19 +38,21 @@ jobs:
           echo "=== Checking npm installation ==="
           npm --version
           where npm
+
+      # 5. Install Robot Framework dependencies
+      - name: Install Robot & Automation dependencies
         shell: cmd
- 
-      - name: Install dependencies (Robot, Allure)
         run: |
-          echo "=== Upgrading pip and installing dependencies ==="
+          echo "=== Upgrading pip and installing Robot dependencies ==="
           python -m pip install --upgrade pip
           pip install robotframework
           pip install robotframework-browser
           pip install allure-robotframework
           rfbrowser init
-        shell: cmd
- 
+
+      # 6. Verify Python & Robot installation
       - name: Check Python and Robot Framework Installation
+        shell: cmd
         run: |
           echo "=== Checking Python installation ==="
           python --version
@@ -120,11 +65,75 @@ jobs:
           pip show robotframework
           echo "=== Checking robotframework-browser installation ==="
           pip show robotframework-browser
-        shell: cmd
- 
+
+      # 7. Install Google Chrome
       - name: Install Google Chrome browser
+        shell: cmd
         run: |
           echo "=== Installing Google Chrome with Chocolatey ==="
           choco install googlechrome -y --ignore-checksums
+          chrome --version
+
+      # ─────────────────────────────────────
+      # APPLICATION (CAB / MSI) STEPS LAST
+      # ─────────────────────────────────────
+
+      # 8. Download CAB from JFrog
+      - name: Download MSI from JFrog
         shell: cmd
- 
+        run: |
+          echo "=== Starting CAB download from JFrog ==="
+          curl -u ${{ secrets.JFROG_USER }}:${{ secrets.JFROG_TOKEN }} ^
+            -O https://ncratleos.jfrog.io/artifactory/atmclient-maven-releases/NDCEBuilder/Released/Components/NDCE-Builder/03.03.00/NDCE-Builder-03.03.00.cab
+          echo "=== Download complete. Listing current directory ==="
+          dir
+
+      # 9. Install 7-Zip
+      - name: Install 7-Zip
+        shell: cmd
+        run: |
+          choco install 7zip -y
+
+      # 10. Extract CAB
+      - name: Extract CAB file
+        shell: cmd
+        run: |
+          echo "=== Extracting CAB file with 7-Zip ==="
+          "C:\Program Files\7-Zip\7z.exe" x NDCE-Builder-03.03.00.cab -oextracted
+          dir extracted
+
+      # 11. Install MSI and validate
+      - name: Install Web Application MSI and validate
+        shell: pwsh
+        run: |
+          Write-Host "=== Installing MSI ==="
+
+          $msi = Get-ChildItem -Path extracted -Recurse -Filter NDCe_Builder_Setup.msi | Select-Object -First 1
+          if (-not $msi) {
+            Write-Host "MSI not found!"
+            exit 1
+          }
+
+          Write-Host "Found MSI at $($msi.FullName)"
+          Start-Process msiexec `
+            -ArgumentList "/i `"$($msi.FullName)`" /qn /l*v install.log" `
+            -Wait
+
+          Get-Content install.log
+
+          $installPath = "C:\Program Files\NCR\NDCe Builder"
+          if (-not (Test-Path $installPath)) {
+            Write-Host "Install directory NOT found!"
+            exit 1
+          }
+
+          Write-Host "Install directory exists"
+          Get-ChildItem $installPath
+
+          $batFile = Join-Path $installPath "builderstartup.bat"
+          if (-not (Test-Path $batFile)) {
+            Write-Host "builderstartup.bat NOT found!"
+            exit 1
+          }
+
+          Write-Host "builderstartup.bat found."
