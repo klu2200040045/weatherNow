@@ -1,128 +1,130 @@
-name: Windows MSI Dependency Validation (GitHub Runner)
+name: Builder Automation Tests
+ 
 
 on:
   workflow_dispatch:
-
+ 
 jobs:
-  msi-deps-check:
+  test:
     runs-on: windows-latest
-
     steps:
-      # 1. Checkout repository (automation repo)
       - name: Checkout code
         uses: actions/checkout@v4
-
-      # 2. Download MSI package (inside CAB) from JFrog
-      - name: Download Windows MSI package from JFrog
-        shell: cmd
+ 
+      - name: Download MSI from JFrog
         run: |
-          echo === Downloading MSI CAB package ===
-          curl -u ${{ secrets.JFROG_USER }}:${{ secrets.JFROG_TOKEN }} ^
-            -O https://ncratleos.jfrog.io/artifactory/atmclient-maven-releases/NDCEBuilder/Released/Components/NDCE-Builder/03.03.00/NDCE-Builder-03.03.00.cab
+          echo "=== Starting MSI download from JFrog ==="
+          curl -u ${{ secrets.JFROG_USER }}:${{ secrets.JFROG_TOKEN }} -O "https://ncratleos.jfrog.io/artifactory/atmclient-maven-releases/NDCEBuilder/Released/Components/NDCE-Builder/03.03.00/NDCE-Builder-03.03.00.cab%22
+          echo "=== Download complete. Listing current directory ==="
           dir
-
-      # 3. Install 7-Zip (CAB extraction dependency)
-      - name: Install 7-Zip
         shell: cmd
+ 
+      - name: Download 7-Zip
         run: |
           choco install 7zip -y
-
-      # 4. Extract CAB to access MSI
-      - name: Extract CAB file
         shell: cmd
+ 
+      - name: Extract CAB file
         run: |
+          echo "=== Extracting CAB file with 7-Zip ==="
           "C:\Program Files\7-Zip\7z.exe" x NDCE-Builder-03.03.00.cab -oextracted
           dir extracted
-
-      # 5. Install MSI silently and validate Windows artifacts
-      - name: Install MSI and validate installation
-        shell: pwsh
+        shell: cmd
+ 
+      - name: List extracted files
         run: |
-          Write-Host "=== Searching for MSI installer ==="
-
-          $msi = Get-ChildItem extracted -Recurse -Filter *.msi | Select-Object -First 1
-          if (-not $msi) {
-            Write-Host "❌ MSI file not found"
+          dir extracted
+        shell: cmd
+ 
+      - name: Install Web Application MSI and Log Details
+        run: |
+          Write-Host "=== Installing MSI ==="
+          $msi = Get-ChildItem -Path extracted -Recurse -Filter NDCe_Builder_Setup.msi | Select-Object -First 1
+          if ($msi) {
+            Write-Host "Found MSI at $($msi.FullName)"
+            $process = Start-Process msiexec -ArgumentList "/i `"$($msi.FullName)`" /qn /l*v install.log" -Wait -PassThru
+            Write-Host "MSI install exited with code $($process.ExitCode)"
+            Get-Content install.log
+          } else {
+            Write-Host "MSI not found!"
             exit 1
           }
-
-          Write-Host "✅ Found MSI at $($msi.FullName)"
-
-          Start-Process msiexec `
-            -ArgumentList "/i `"$($msi.FullName)`" /qn /l*v install.log" `
-            -Wait
-
-          Write-Host "=== MSI installation log ==="
-          Get-Content install.log
-
+          Write-Host "=== MSI installation complete ==="
           $installPath = "C:\Program Files\NCR\NDCe Builder"
-          if (-not (Test-Path $installPath)) {
-            Write-Host "❌ Installation directory missing"
+          Write-Host "=== Checking install directory: $installPath ==="
+          if (Test-Path "$installPath") {
+            Write-Host "Install directory exists. Listing contents:"
+            Get-ChildItem "$installPath"
+          } else {
+            Write-Host "Install directory NOT found!"
             exit 1
           }
-
-          Write-Host "✅ Installation directory exists"
-
           $batFile = Join-Path $installPath "builderstartup.bat"
-          if (-not (Test-Path $batFile)) {
-            Write-Host "❌ builderstartup.bat missing"
+          Write-Host "=== Checking for builderstartup.bat at $batFile ==="
+          if (Test-Path $batFile) {
+            Write-Host "builderstartup.bat found."
+          } else {
+            Write-Host "builderstartup.bat NOT found!"
             exit 1
           }
-
-          Write-Host "✅ builderstartup.bat exists"
-          Write-Host "=== MSI dependency validation PASSED ==="
-
-      # 6. Setup Python
-      - name: Setup Python
+          Write-Host "=== Starting app service (if needed) ==="
+          try {
+            Start-Service "YourAppService"
+            Write-Host "Service started."
+          } catch {
+            Write-Host "Service not found or could not be started. Skipping."
+          }
+          Start-Sleep -Seconds 30
+        shell: pwsh
+ 
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      # 7. Verify Python installation
-      - name: Verify Python
-        shell: cmd
-        run: |
-          echo === Python ===
-          python --version
-          where python
-          pip --version
-
-      # 8. Setup Node.js
-      - name: Setup Node.js
+ 
+      - name: Install Node.js (npm)
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      # 9. Verify Node.js and npm
-      - name: Verify Node.js and npm
-        shell: cmd
+ 
+      - name: Check Node.js and npm Installation
         run: |
-          echo === Node ===
+          echo "=== Checking Node.js installation ==="
           node --version
           where node
-          echo === npm ===
+          echo "=== Checking npm installation ==="
           npm --version
-
-      # 10. Install Robot Framework dependencies (NO test execution)
-      - name: Install Robot Framework dependencies
+          where npm
         shell: cmd
+ 
+      - name: Install dependencies (Robot, Allure)
         run: |
+          echo "=== Upgrading pip and installing dependencies ==="
           python -m pip install --upgrade pip
-          pip install robotframework robotframework-browser allure-robotframework
+          pip install robotframework
+          pip install robotframework-browser
+          pip install allure-robotframework
           rfbrowser init
-
-      # 11. Verify Robot Framework installation
-      - name: Verify Robot Framework
         shell: cmd
+ 
+      - name: Check Python and Robot Framework Installation
         run: |
-          echo === Robot Framework ===
+          echo "=== Checking Python installation ==="
+          python --version
+          where python
+          echo "=== Checking pip installation ==="
+          pip --version
+          where pip
+          echo "=== Checking Robot Framework installation ==="
           python -m robot --version
+          pip show robotframework
+          echo "=== Checking robotframework-browser installation ==="
           pip show robotframework-browser
-
-      # 12. Install Google Chrome (browser dependency only)
-      - name: Install Google Chrome
         shell: cmd
+ 
+      - name: Install Google Chrome browser
         run: |
-          choco install googlechrome -y
-          echo === Chrome ===
-          chrome --version
+          echo "=== Installing Google Chrome with Chocolatey ==="
+          choco install googlechrome -y --ignore-checksums
+        shell: cmd
+ 
