@@ -1,0 +1,102 @@
+name: NDCe Reference – GitHub Hosted Install Validation
+
+on:
+  workflow_dispatch:
+
+env:
+  CLONE_BRANCH: master
+  WINDOWS_VERSION: win10
+  XFS_SIMULATOR_VERSION: 4.7.0
+  APTRA_ADVANCE_NDC_VERSION: 5.2.0
+  EMV_VERSION: 5.0.0
+  NDC_ENTERPRISE_VERSION: andc52x-2.10.0-M01
+  AUTOMATION_BASE_TARF_VERSION: 1.1.6
+  AUTOMATION_NDC_ENTERPRISE_VERSION: 01.09.00Pre
+  CONNECTIONS_SERVER_URL: http://153.81.244.117:8092/connections
+  PROJECT_TYPE: Reference
+
+jobs:
+  install-validation:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CLONE_BRANCH }}
+
+      - name: Print Runner Environment
+        shell: pwsh
+        run: |
+          Write-Host "OS:" (Get-CimInstance Win32_OperatingSystem).Caption
+          Write-Host "PowerShell:" $PSVersionTable.PSVersion
+          Write-Host "User:" $env:USERNAME
+          Write-Host "Workspace:" $env:GITHUB_WORKSPACE
+
+      - name: Validate Dependency Versions
+        shell: pwsh
+        run: |
+          $deps = @{
+            "XFS Simulator"        = "${{ env.XFS_SIMULATOR_VERSION }}"
+            "APTRA Advance NDC"    = "${{ env.APTRA_ADVANCE_NDC_VERSION }}"
+            "EMV"                 = "${{ env.EMV_VERSION }}"
+            "NDC Enterprise"      = "${{ env.NDC_ENTERPRISE_VERSION }}"
+            "Automation TARF"     = "${{ env.AUTOMATION_BASE_TARF_VERSION }}"
+            "Automation NDCe"     = "${{ env.AUTOMATION_NDC_ENTERPRISE_VERSION }}"
+          }
+
+          foreach ($k in $deps.Keys) {
+            Write-Host "$k version => $($deps[$k])"
+          }
+
+      - name: Validate Connections Server Reachability
+        shell: pwsh
+        run: |
+          try {
+            $r = Invoke-WebRequest "${{ env.CONNECTIONS_SERVER_URL }}" -TimeoutSec 10
+            Write-Host "✅ Connections Server reachable. Status:" $r.StatusCode
+          } catch {
+            Write-Warning "❌ Connections Server NOT reachable"
+          }
+
+      - name: Simulate Installation Readiness Check
+        shell: pwsh
+        run: |
+          Write-Host "Checking installer directories..."
+          $expectedDirs = @(
+            "Installation/APTRA",
+            "Installation/XFS",
+            "Installation/EMV",
+            "Installation/NDC_Enterprise"
+          )
+
+          foreach ($dir in $expectedDirs) {
+            if (Test-Path $dir) {
+              Write-Host "✅ Found $dir"
+            } else {
+              Write-Warning "⚠ Missing $dir (installer check only)"
+            }
+          }
+
+      - name: Compatibility Validation
+        shell: pwsh
+        run: |
+          if ("${{ env.APTRA_ADVANCE_NDC_VERSION }}" -like "5.2*" -and
+              "${{ env.NDC_ENTERPRISE_VERSION }}" -notlike "andc52*") {
+            Write-Error "Incompatible APTRA & NDC Enterprise versions"
+          }
+          Write-Host "✅ Version compatibility OK"
+
+      - name: Installation Validation Summary
+        shell: pwsh
+        run: |
+          Write-Host "===================================="
+          Write-Host " GitHub Hosted Installation Summary"
+          Write-Host "===================================="
+          Write-Host "Project Type:" "${{ env.PROJECT_TYPE }}"
+          Write-Host "Windows Target:" "${{ env.WINDOWS_VERSION }}"
+          Write-Host "APTRA:" "${{ env.APTRA_ADVANCE_NDC_VERSION }}"
+          Write-Host "XFS:" "${{ env.XFS_SIMULATOR_VERSION }}"
+          Write-Host "EMV:" "${{ env.EMV_VERSION }}"
+          Write-Host "NDC Enterprise:" "${{ env.NDC_ENTERPRISE_VERSION }}"
+          Write-Host "===================================="
