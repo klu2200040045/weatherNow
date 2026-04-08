@@ -1,0 +1,784 @@
+name: NDCe Reference AutoTrigger_Win10
+
+on:
+    workflow_dispatch:
+      inputs:
+        Clone_Branch:
+           required: true
+           description: 'Branch to clone from '
+           default: 'master'
+           type: string
+
+        Azure_IP_Address:
+          required: true
+          description: 'Azure IP Address (range: 153.81.237.132 to 153.81.237.158)'
+          type: string
+          default: '153.81.237.136'
+
+        windows_version:
+          required: true
+          description: 'Windows version to use'
+          type: string
+          default: 'win10'
+
+        XFS_Simulator_version:
+          required: false
+          description: 'XFS Simulator version to use'
+          type: string
+          default: '4.7.0'
+
+        APTRA_Advance_NDC_Version:
+          required: false
+          description: 'APTRA Advance NDC Version to use'
+          type: string
+          default: '5.2.0'
+
+        APTRA_Advance_NDC_Patch_Branch:
+          required: false
+          description: 'APTRA Advance NDC Patch Branch to use'
+          type: string
+          default: ''
+
+        EMV_Version:
+          required: false
+          description: 'EMV Version to use'
+          type: string
+          default: '5.0.0'
+
+        NDC_Enterprise_Version:
+          required: false
+          description: 'NDC Enterprise Version to use'
+          type: string
+          default: 'andc52x-2.10.0-M01'
+
+        Automation_Base_TARF_Version:
+          required: false
+          description: 'Automation Base TARF Version to use'
+          type: string
+          default: '1.1.6'
+
+        Connections_Server_URL:
+          required: false
+          description: 'Connections Server URL to use'
+          type: string
+          default: 'http://153.81.244.117:8092/connections'
+
+        Project_Type:
+          required: false
+          description: 'Project Type to use'
+          type: string
+          default: 'Reference'
+
+        Automation_for_NDC_Enterprise_Version:
+          required: false
+          description: 'Automation for NDC Enterprise Version to use'
+          type: string
+          default: '01.09.00Pre'
+
+        RunBatFile:
+          required: true
+          description: 'Name of the .bat file to execute'
+          type: string
+          default: 'CallAntScript.bat'
+   
+        TestSuiteName:
+          required: true
+          description: 'Name of the test suite to run'
+          type: string
+          default: 'Execute_TestSuite'
+
+        TestCaseDirs_Batch1:
+          required: false
+          description: 'Comma-separated list of test case directories'
+          type: string
+          default: ''         
+
+        TestCaseDirs_Batch2:
+          required: false
+          description: 'Comma-separated list of test case directories'
+          type: string
+          default: ''   
+
+        BuilderUpdates_Clone_Branch:
+          required: true
+          description: 'Branch to clone for Builder Updates'
+          default: 'master'
+          type: string
+
+        BuilderUpdates_RunBatFile:
+          required: true
+          description: 'Name of the .bat file for Builder Updates'
+          type: string
+          default: 'CallAntScript.bat'
+
+        BuilderUpdates_TestSuiteName:
+          required: true
+          description: 'Name of the test suite for Builder Updates'
+          type: string
+          default: 'Execute_TestSuite'
+
+        BuilderUpdates_TestCaseDirs:
+          required: false
+          description: 'Comma-separated list of test case directories for Builder Updates'
+          type: string
+          default: ''
+
+        BuilderUpdates_TestCaseDirs_Batch2:
+          required: false
+          description: 'set the string parameter to "No" if you do not want to run Builder Updates Batch 2'
+          type: string
+          default: ''
+    schedule:
+      - cron: '30 10 * * 1-5'  # Runs at 10:30 AM UTC every weekday
+
+env:
+  project_type: ${{ github.event.inputs.Project_Type || 'Reference' }}
+
+jobs: 
+    AzureVMUtilities_Delete:
+        runs-on: ubuntu-latest
+        env:
+          AZURE_IP_ADDRESS: ${{ github.event.inputs.Azure_IP_Address || '153.81.237.136' }}
+        outputs:
+            run_id: ${{ steps.get-run-id.outputs.run_id }}
+        steps:
+            - name: print IP Address
+              run: echo "Deleting Azure VM with IP ${{ env.AZURE_IP_ADDRESS }}"
+
+            - name: Get latest run ID before triggering
+              id: get-before-id
+              env:
+                  PAT_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+              run: |
+                echo "Getting latest run ID before triggering..."
+                BEFORE_RUN_ID=$(curl -s -H "Authorization: token $PAT_TOKEN" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  "https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/workflows/AzureVMUtilities.yml/runs?branch=master&event=workflow_dispatch&per_page=1" \
+                  | jq -r '.workflow_runs[0].id // "0"')
+                echo "Latest run ID before trigger: $BEFORE_RUN_ID"
+                echo "before_run_id=$BEFORE_RUN_ID" >> $GITHUB_OUTPUT
+            - name: Trigger Azure VM Utilities Workflow
+              id: trigger
+              env:
+                PAT_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+              run: |
+                echo "Triggering Azure VM Utilities Workflow..."
+                  RESPONSE=$(curl -s -X POST \
+                    -H "Authorization: token $PAT_TOKEN" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/workflows/AzureVMUtilities.yml/dispatches \
+                    -d '{
+                            "ref": "master",
+                            "inputs": {
+                                "azure_ip_address": "${{ env.AZURE_IP_ADDRESS }}",
+                                "action": "Delete"
+                            }
+                        }')
+                  echo "Triggered ne-deploy workflow"
+        
+            - name: Wait a few seconds before fetching run
+              run: sleep 5
+
+            - name: Get the new run ID that was just triggered
+              id: get-run-id
+              env:
+                  PAT_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+                  BEFORE_RUN_ID: ${{ steps.get-before-id.outputs.before_run_id }}
+              run: |
+                echo "Fetching the new workflow run ID (must be greater than $BEFORE_RUN_ID)..."
+                RUN_ID=""
+                for i in {1..12}; do   # retry up to 12 times (60s)
+                  # Get the latest run and check if it's newer than the before_run_id
+                  LATEST_RUN=$(curl -s -H "Authorization: token $PAT_TOKEN" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    "https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/workflows/AzureVMUtilities.yml/runs?branch=master&event=workflow_dispatch&per_page=5" \
+                    | jq -r ".workflow_runs[] | select(.id > $BEFORE_RUN_ID) | .id" | head -n 1)
+                  
+                  if [ -n "$LATEST_RUN" ]; then
+                    echo "Found new run ID: $LATEST_RUN"
+                    echo "run_id=$LATEST_RUN" >> $GITHUB_OUTPUT
+                    exit 0
+                  else
+                    echo "New run not found yet, retrying..."
+                    sleep 5
+                  fi
+                done
+                echo "ERROR: New workflow run not found after 1 minute."
+                exit 1
+            - name: Wait for Azure VM Utilities workflow to complete
+              env:
+                PAT_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+              run: |
+                RUN_ID=${{ steps.get-run-id.outputs.run_id }}
+                echo "Waiting for workflow $RUN_ID to complete..."
+                while true; do
+                  STATUS=$(curl -s -H "Authorization: token $PAT_TOKEN" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    "https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/runs/$RUN_ID" \
+                    | jq -r '.status')
+                  CONCLUSION=$(curl -s -H "Authorization: token $PAT_TOKEN" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    "https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/runs/$RUN_ID" \
+                    | jq -r '.conclusion')
+                  echo "Current status: $STATUS, conclusion: $CONCLUSION"
+                  if [[ "$STATUS" == "completed" ]]; then
+                    if [[ "$CONCLUSION" == "success" ]]; then
+                      echo "Workflow succeeded!"
+                      break
+                    else
+                      echo "Workflow failed or cancelled: $CONCLUSION"
+                      exit 1
+                    fi
+                  fi
+                  sleep 60
+                done
+                echo "Workflow $RUN_ID completed."
+    
+    Stack_Deployment_on_AzureVm:
+        runs-on: ubuntu-latest
+        needs: AzureVMUtilities_Delete
+        env:
+          AZURE_IP_ADDRESS: ${{ github.event.inputs.Azure_IP_Address || '153.81.237.136' }}
+          WINDOWS_VERSION: ${{ github.event.inputs.windows_version || 'win10' }}
+          XFS_SIMULATOR_VERSION: ${{ github.event.inputs.XFS_Simulator_version || '4.7.0' }}
+          APTRA_ADVANCE_NDC_VERSION: ${{ github.event.inputs.APTRA_Advance_NDC_Version || '5.2.0' }}
+          APTRA_ADVANCE_NDC_PATCH_BRANCH: ${{ github.event.inputs.APTRA_Advance_NDC_Patch_Branch || '' }}
+          EMV_VERSION: ${{ github.event.inputs.EMV_Version || '5.0.0' }}
+          NDC_ENTERPRISE_VERSION: ${{ github.event.inputs.NDC_Enterprise_Version || 'andc52x-2.10.0-M01' }}
+          AUTOMATION_BASE_TARF_VERSION: ${{ github.event.inputs.Automation_Base_TARF_Version || '1.1.6' }}
+          CONNECTIONS_SERVER_URL: ${{ github.event.inputs.Connections_Server_URL || 'http://153.81.244.117:8092/connections' }}
+          AUTOMATION_FOR_NDC_ENTERPRISE_VERSION: ${{ github.event.inputs.Automation_for_NDC_Enterprise_Version || '01.09.00Pre' }}
+
+        outputs:
+            run_id: ${{ steps.get-run-id.outputs.run_id }}
+        steps:
+            - name: Get latest run ID before triggering
+              id: get-before-id
+              env:
+                  PAT_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+              run: |
+                echo "Getting latest run ID before triggering..."
+                BEFORE_RUN_ID=$(curl -s -H "Authorization: token $PAT_TOKEN" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  "https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/workflows/Stack_Deployment_NDCe_Azure_VM.yml/runs?branch=master&event=workflow_dispatch&per_page=1" \
+                  | jq -r '.workflow_runs[0].id // "0"')
+                echo "Latest run ID before trigger: $BEFORE_RUN_ID"
+                echo "before_run_id=$BEFORE_RUN_ID" >> $GITHUB_OUTPUT
+            - name: Trigger ne-deploy workflow
+              id: trigger
+              env:
+                PAT_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+              run: |
+                echo "Triggering ne-deploy workflow..."
+                RESPONSE=$(curl -s -X POST \
+                  -H "Authorization: token $PAT_TOKEN" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/workflows/Stack_Deployment_NDCe_Azure_VM.yml/dispatches \
+                  -d '{
+                        "ref": "master",
+                        "inputs": {
+                            "azure_vm_details": "NDCeF, ${{ env.AZURE_IP_ADDRESS }},",
+                            "windows_version": "${{ env.WINDOWS_VERSION }}",
+                            "XFS_Simulator_version": "${{ env.XFS_SIMULATOR_VERSION }}",
+                            "APTRA_Advance_NDC_Version": "${{ env.APTRA_ADVANCE_NDC_VERSION }}",
+                            "APTRA_Advance_NDC_Patch_Branch": "${{ env.APTRA_ADVANCE_NDC_PATCH_BRANCH }}",
+                            "EMV_Version": "${{ env.EMV_VERSION }}",
+                            "NDC_Enterprise_Version": "${{ env.NDC_ENTERPRISE_VERSION }}",
+                            "Automation_Base_TARF_Version": "${{ env.AUTOMATION_BASE_TARF_VERSION }}",
+                            "Connections_Server_URL": "${{ env.CONNECTIONS_SERVER_URL }}",
+                            "Project_Type": "${{ env.project_type }}",
+                            "Automation_for_NDC_Enterprise_Version": "${{ env.AUTOMATION_FOR_NDC_ENTERPRISE_VERSION }}"
+                        }
+                    }')
+                echo "Triggered ne-deploy workflow"
+            - name: Wait a few seconds before fetching run
+              run: sleep 5
+            
+            - name: Get the new run ID that was just triggered
+              id: get-run-id
+              env:
+                  PAT_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+                  BEFORE_RUN_ID: ${{ steps.get-before-id.outputs.before_run_id }}
+              run: |
+                echo "Fetching the new workflow run ID (must be greater than $BEFORE_RUN_ID)..."
+                RUN_ID=""
+                for i in {1..12}; do   # retry up to 12 times (60s)
+                  # Get the latest run and check if it's newer than the before_run_id
+                  LATEST_RUN=$(curl -s -H "Authorization: token $PAT_TOKEN" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    "https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/workflows/Stack_Deployment_NDCe_Azure_VM.yml/runs?branch=master&event=workflow_dispatch&per_page=5" \
+                    | jq -r ".workflow_runs[] | select(.id > $BEFORE_RUN_ID) | .id" | head -n 1)
+                  
+                  if [ -n "$LATEST_RUN" ]; then
+                    echo "Found new run ID: $LATEST_RUN"
+                    echo "run_id=$LATEST_RUN" >> $GITHUB_OUTPUT
+                    exit 0
+                  else
+                    echo "New run not found yet, retrying..."
+                    sleep 5
+                  fi
+                done
+                echo "ERROR: New workflow run not found after 1 minute."
+                exit 1
+            
+            - name: Wait for Stack Deployment NDCe Azure VM workflow to complete
+              env:
+                PAT_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+              run: |
+                RUN_ID=${{ steps.get-run-id.outputs.run_id }}
+                echo "Waiting for workflow $RUN_ID to complete..."
+                while true; do
+                  STATUS=$(curl -s -H "Authorization: token $PAT_TOKEN" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    "https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/runs/$RUN_ID" \
+                    | jq -r '.status')
+                  CONCLUSION=$(curl -s -H "Authorization: token $PAT_TOKEN" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    "https://api.github.com/repos/ncratleos-swt-banking/ne-deploy/actions/runs/$RUN_ID" \
+                    | jq -r '.conclusion')
+                  echo "Current status: $STATUS, conclusion: $CONCLUSION"
+                  if [[ "$STATUS" == "completed" ]]; then
+                    if [[ "$CONCLUSION" == "success" ]]; then
+                      echo "Workflow succeeded!"
+                      break
+                    else
+                      echo "Workflow failed or cancelled: $CONCLUSION"
+                      exit 1
+                    fi
+                  fi
+                  sleep 60
+                done
+                echo "Workflow $RUN_ID completed."
+            - name: sleep for 10 min
+              run: sleep 600
+
+    Run_Tests_Batch1:
+        runs-on: ndce-automation-runners
+        needs: Stack_Deployment_on_AzureVm
+        env:
+            WORKSPACE: ${{ github.workspace }}
+            TestCaseDirs: ${{ github.event.inputs.TestCaseDirs_Batch1 }}
+            AZURE_IP_ADDRESS: ${{ github.event.inputs.Azure_IP_Address || '153.81.237.136' }}
+            CLONE_BRANCH: ${{ github.event.inputs.Clone_Branch || 'master' }}
+            RUNBATFILE: ${{ github.event.inputs.RunBatFile || 'CallAntScript.bat' }}
+            TESTSUITE: ${{ github.event.inputs.TestSuiteName || 'Execute_TestSuite' }}
+
+        steps:
+            - name: Set TestCaseDirs for push events
+              shell: pwsh
+              run: |
+                $TestCaseDirs = "$env:TestCaseDirs"
+                # Set default TestCaseDirs if not provided (for push events)
+                if ([string]::IsNullOrEmpty($TestCaseDirs)) {
+                  $defaultDir = "Functional\Reference Project\Reference Default\Balance\Balance.robot,
+                  Functional\Reference Project\Reference Default\Balance\BalanceWithDispenseFlow.robot,
+                  Functional\Reference Project\Reference Default\Cash Deposit\RetainCounterfeit.robot,
+                  Functional\Reference Project\Reference Default\MobileTopup\Mobile_TopUp.robot,
+                  Functional\Reference Project\Reference Default\PinChange\PinChange.robot,
+                  Functional\Reference Project\Reference Default\Cash Deposit\CashAcceptTx.robot,
+                  Functional\Reference Project\Reference Default\Withdrawal\Withdrawal.robot,
+                  Functional\Reference Project\Reference Default\Withdrawal\WithdrawalErrorScenarios.robot"
+                 Add-Content -Path $env:GITHUB_ENV -Value "TestCaseDirs<<EOF"
+                 Add-Content -Path $env:GITHUB_ENV -Value $defaultDir
+                 Add-Content -Path $env:GITHUB_ENV -Value "EOF"
+                } else {
+                  echo "TestCaseDirs=$TestCaseDirs" >> $env:GITHUB_ENV
+                }
+            
+            - name: Parse the TestcaseDirs (save as multiline env)
+              shell: pwsh
+              run: |
+                # Convert comma-separated list into newline-separated list
+                $testCaseDirs = "${{ env.TestCaseDirs }}" -split '\s*,\s*' -join "`n"
+                # Save MULTILINE value into GITHUB_ENV (this is the supported format)
+                "TestCaseDirs<<EOF" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                $testCaseDirs       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                "EOF"               | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            - name: Print TestCaseDirs
+              run: |
+                echo "=== TestCaseDirs Environment Variable Content ==="
+                echo "${{ env.TestCaseDirs }}"
+            - name: Print IP Address
+              run: |
+                echo "Azure IP Address: ${{ env.AZURE_IP_ADDRESS }}"
+            - name: Checkout Repository
+              uses: actions/checkout@v4
+              with:
+                ref: ${{ env.Clone_Branch }}
+      
+            - name: Print Workspace
+              run: |
+                echo "Workspace: ${{ github.workspace }}"
+            - name: Set BASEDIR for Ant
+              shell: pwsh
+              run: |
+                "BASEDIR=${{ env.WORKSPACE}}" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            - name: Run Reference Test Suite
+              shell: cmd
+              run: |
+                cd  /d "%BASEDIR%\Configuration\Build-Scripts"
+                .\"${{ env.RUNBATFILE }}" ""${{ env.TESTSUITE }}"" ""${{ env.AZURE_IP_ADDRESS }}"" "NDCeHost" "False"
+            - name: Post counts as annotation
+              shell: bash
+              run: |
+                # Inline Python to parse counts
+                python - << PY > counts.txt
+                import xml.etree.ElementTree as ET
+                import os
+                
+                xml_path = os.path.join(os.environ.get("WORKSPACE", ""), "TestSuiteReport/output.xml")
+                root = ET.parse(xml_path).getroot()
+                
+                p = f = s = 0
+                for t in root.findall(".//test"):
+                    st = (t.find("status").get("status", "") or "").upper()
+                    if st == "PASS": p += 1
+                    elif st == "FAIL": f += 1
+                    elif st == "SKIP": s += 1
+                
+                print(f"{p} {f} {s}")
+                PY
+      
+                # Strip CR and read
+                read PASSED FAILED SKIPPED < <(tr -d '\r' < counts.txt)
+      
+                # Ensure numeric-only (extra safety)
+                PASSED=${PASSED//[^0-9]/}
+                FAILED=${FAILED//[^0-9]/}
+                SKIPPED=${SKIPPED//[^0-9]/}
+                
+                # # Read counts and emit annotation
+                # read PASSED FAILED SKIPPED < counts.txt
+                
+                TOTAL=$((PASSED+FAILED+SKIPPED))
+                SEV="notice"; [ "$FAILED" -gt 0 ] && SEV="error"
+                echo "::${SEV} title=Reference Robot Test Batch1 Totals::Total ${TOTAL} | ✅ Passed: ${PASSED} | ❌ Failed: ${FAILED} | ⚠️ Skipped: ${SKIPPED}"
+
+            - name: Upload Reports folder as artifact
+              uses: actions/upload-artifact@v4
+              with:
+                name: Reference-Project-Batch1-Reports
+                path: ${{ env.WORKSPACE }}\TestSuiteReport
+
+    Run_Tests_Batch2:
+        runs-on: ndce-automation-runners
+        needs: Run_Tests_Batch1
+        env:
+            WORKSPACE: ${{ github.workspace }}
+            TestCaseDirs: ${{ github.event.inputs.TestCaseDirs_Batch2 }}
+            AZURE_IP_ADDRESS: ${{ github.event.inputs.Azure_IP_Address || '153.81.237.136' }}
+            CLONE_BRANCH: ${{ github.event.inputs.Clone_Branch || 'master' }}
+            RUNBATFILE: ${{ github.event.inputs.RunBatFile || 'CallAntScript.bat' }}
+            TESTSUITE: ${{ github.event.inputs.TestSuiteName || 'Execute_TestSuite' }}
+
+        steps:
+            - name: Set TestCaseDirs for push events
+              shell: pwsh
+              run: |
+                $TestCaseDirs = "$env:TestCaseDirs"
+                # Set default TestCaseDirs if not provided (for push events)
+                if ([string]::IsNullOrEmpty($TestCaseDirs)) {
+                  $defaultDir = "Functional\Device Specific Tests\Reference Project\BRM\BalanceAndDispense.robot,
+                  Functional\Device Specific Tests\Reference Project\DualDispenser\BalanceAndDispense.robot,
+                  Functional\Device Specific Tests\Reference Project\Recycler\GBRU\BalanceAndDispense.robot,
+                  Functional\Device Specific Tests\Reference Project\Recycler\GBRU\DepositAndDispense.robot,
+                  Functional\Device Specific Tests\Reference Project\S2\BalanceAndDispense.robot"
+                 Add-Content -Path $env:GITHUB_ENV -Value "TestCaseDirs<<EOF"
+                 Add-Content -Path $env:GITHUB_ENV -Value $defaultDir
+                 Add-Content -Path $env:GITHUB_ENV -Value "EOF"
+                } else {
+                  echo "TestCaseDirs=$TestCaseDirs" >> $env:GITHUB_ENV
+                }
+            
+            - name: Parse the TestcaseDirs (save as multiline env)
+              shell: pwsh
+              run: |
+                # Convert comma-separated list into newline-separated list
+                $testCaseDirs = "${{ env.TestCaseDirs }}" -split '\s*,\s*' -join "`n"
+                # Save MULTILINE value into GITHUB_ENV (this is the supported format)
+                "TestCaseDirs<<EOF" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                $testCaseDirs       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                "EOF"               | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            - name: Print TestCaseDirs
+              run: |
+                echo "=== TestCaseDirs Environment Variable Content ==="
+                echo "${{ env.TestCaseDirs }}"
+            - name: Print IP Address
+              run: |
+                echo "Azure IP Address: ${{ env.AZURE_IP_ADDRESS }}"
+            - name: Checkout Repository
+              uses: actions/checkout@v4
+              with:
+                ref: ${{ env.Clone_Branch }}
+      
+            - name: Print Workspace
+              run: |
+                echo "Workspace: ${{ github.workspace }}"
+            - name: Set BASEDIR for Ant
+              shell: pwsh
+              run: |
+                "BASEDIR=${{ env.WORKSPACE}}" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            - name: Run Reference Test Suite
+              shell: cmd
+              run: |
+                cd  /d "%BASEDIR%\Configuration\Build-Scripts"
+                .\"${{ env.RUNBATFILE }}" ""${{ env.TESTSUITE }}"" ""${{ env.AZURE_IP_ADDRESS }}"" "NDCeHost" "False"
+            - name: Post counts as annotation
+              shell: bash
+              run: |
+                # Inline Python to parse counts
+                python - << PY > counts.txt
+                import xml.etree.ElementTree as ET
+                import os
+                
+                xml_path = os.path.join(os.environ.get("WORKSPACE", ""), "TestSuiteReport/output.xml")
+                root = ET.parse(xml_path).getroot()
+                
+                p = f = s = 0
+                for t in root.findall(".//test"):
+                    st = (t.find("status").get("status", "") or "").upper()
+                    if st == "PASS": p += 1
+                    elif st == "FAIL": f += 1
+                    elif st == "SKIP": s += 1
+                
+                print(f"{p} {f} {s}")
+                PY
+      
+                # Strip CR and read
+                read PASSED FAILED SKIPPED < <(tr -d '\r' < counts.txt)
+      
+                # Ensure numeric-only (extra safety)
+                PASSED=${PASSED//[^0-9]/}
+                FAILED=${FAILED//[^0-9]/}
+                SKIPPED=${SKIPPED//[^0-9]/}
+                
+                # # Read counts and emit annotation
+                # read PASSED FAILED SKIPPED < counts.txt
+                
+                TOTAL=$((PASSED+FAILED+SKIPPED))
+                SEV="notice"; [ "$FAILED" -gt 0 ] && SEV="error"
+                echo "::${SEV} title=Reference Robot Test Batch2  Totals::Total ${TOTAL} | ✅ Passed: ${PASSED} | ❌ Failed: ${FAILED} | ⚠️ Skipped: ${SKIPPED}"
+
+            - name: Upload Reports folder as artifact
+              uses: actions/upload-artifact@v4
+              with:
+                name: Reference-Project-Batch2-Reports
+                path: ${{ env.WORKSPACE }}\TestSuiteReport
+
+    Run_NDCe_Builder_Updates_Batch1:
+        runs-on: ndce-automation-runners
+        needs: Run_Tests_Batch2
+        env:
+            WORKSPACE: ${{ github.workspace }}
+            TestCaseDirs: ${{ github.event.inputs.BuilderUpdates_TestCaseDirs }}
+            AZURE_IP_ADDRESS: ${{ github.event.inputs.Azure_IP_Address || '153.81.237.136' }}
+            BUILDER_UPDATES_CLONE_BRANCH: ${{ github.event.inputs.BuilderUpdates_Clone_Branch || 'master' }}
+            BUILDER_UPDATES_RUNBATFILE: ${{ github.event.inputs.BuilderUpdates_RunBatFile || 'CallAntScript.bat' }}
+            BUILDER_UPDATES_TESTSUITE: ${{ github.event.inputs.BuilderUpdates_TestSuiteName || 'Execute_TestSuite' }}
+
+        steps:
+
+            - name: sleep 5 min before execution
+              run: sleep 300
+
+            - name: Set TestCaseDirs for push events
+              run: |
+                $TestCaseDirs = "$env:TestCaseDirs"
+                # Set default TestCaseDirs if not provided (for push events)
+                if ([string]::IsNullOrEmpty($TestCaseDirs)) {
+                  $defaultDir = "Functional\Builder Updates\Logical Components\Balance.robot,
+                                 Functional\Builder Updates\Logical Components\BalancewithDispense.robot,
+                                 Functional\Builder Updates\Logical Components\CashDepositTransaction.robot,
+                                 Functional\Builder Updates\Logical Components\CashWithdrawal.robot,
+                                 Functional\Builder Updates\Logical Components\Non-CashTransaction.robot,
+                                 Functional\Builder Updates\Logical Components\PinEntry.robot,
+                                 Functional\Builder Updates\Logical Components\RetainSuspectCounterfiet.robot"
+                  Add-Content -Path $env:GITHUB_ENV -Value "TestCaseDirs<<EOF"
+                  Add-Content -Path $env:GITHUB_ENV -Value $defaultDir
+                  Add-Content -Path $env:GITHUB_ENV -Value "EOF"
+                  echo "${{ env.TestCaseDirs }}"
+                } else {
+                  echo "TestCaseDirs=$TestCaseDirs"  >> $env:GITHUB_ENV
+                }
+            
+            - name: Parse the TestcaseDirs (save as multiline env)
+              shell: pwsh
+              run: |
+                # Convert comma-separated list into newline-separated list
+                $testCaseDirs = "${{ env.TestCaseDirs }}" -split '\s*,\s*' -join "`n"
+                # Save MULTILINE value into GITHUB_ENV (this is the supported format)
+                "TestCaseDirs<<EOF" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                $testCaseDirs       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                "EOF"               | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            - name: Print TestCaseDirs
+              run: |
+                echo "=== TestCaseDirs Environment Variable Content ==="
+                echo "${{ env.TestCaseDirs }}"
+            - name: Print IP Address
+              run: |
+                echo "Azure IP Address: ${{ env.AZURE_IP_ADDRESS }}"
+            - name: Checkout Repository
+              uses: actions/checkout@v4
+              with:
+                ref: ${{ env.BUILDER_UPDATES_CLONE_BRANCH }}
+      
+            - name: Print Workspace
+              run: |
+                echo "Workspace: ${{ github.workspace }}"
+            - name: Set BASEDIR for Ant
+              shell: pwsh
+              run: |
+                "BASEDIR=${{ env.WORKSPACE}}" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            - name: Run Reference Test Suite
+              shell: cmd
+              run: |
+                cd  /d "%BASEDIR%\Configuration\Build-Scripts"
+                .\"${{ env.BUILDER_UPDATES_RUNBATFILE }}" ""${{ env.BUILDER_UPDATES_TESTSUITE }}"" ""${{ env.AZURE_IP_ADDRESS }}"" "NDCeHost" "False"
+            - name: Post counts as annotation
+              shell: bash
+              run: |
+                # Inline Python to parse counts
+                python - << PY > counts.txt
+                import xml.etree.ElementTree as ET
+                import os
+                
+                xml_path = os.path.join(os.environ.get("WORKSPACE", ""), "TestSuiteReport/output.xml")
+                root = ET.parse(xml_path).getroot()
+                
+                p = f = s = 0
+                for t in root.findall(".//test"):
+                    st = (t.find("status").get("status", "") or "").upper()
+                    if st == "PASS": p += 1
+                    elif st == "FAIL": f += 1
+                    elif st == "SKIP": s += 1
+                
+                print(f"{p} {f} {s}")
+                PY
+      
+                # Strip CR and read
+                read PASSED FAILED SKIPPED < <(tr -d '\r' < counts.txt)
+      
+                # Ensure numeric-only (extra safety)
+                PASSED=${PASSED//[^0-9]/}
+                FAILED=${FAILED//[^0-9]/}
+                SKIPPED=${SKIPPED//[^0-9]/}
+                
+                # # Read counts and emit annotation
+                # read PASSED FAILED SKIPPED < counts.txt
+                
+                TOTAL=$((PASSED+FAILED+SKIPPED))
+                SEV="notice"; [ "$FAILED" -gt 0 ] && SEV="error"
+                echo "::${SEV} title=NDCe BuilderUpdates_Batch1 Robot Test Totals::Total ${TOTAL} | ✅ Passed: ${PASSED} | ❌ Failed: ${FAILED} | ⚠️ Skipped: ${SKIPPED}"
+
+            - name: Upload Reports folder as artifact
+              uses: actions/upload-artifact@v4
+              with:
+                name: NDCe_BuilderUpdates_Batch1-Reports
+                path: ${{ env.WORKSPACE }}\TestSuiteReport
+
+    Run_NDCe_Builder_Updates_Batch2:
+        if: ${{ github.event.inputs.BuilderUpdates_TestCaseDirs_Batch2 != 'No' || github.event.inputs.BuilderUpdates_TestCaseDirs_Batch2 != 'no' }}
+        runs-on: ndce-automation-runners
+        needs: Run_NDCe_Builder_Updates_Batch1
+        env:
+            WORKSPACE: ${{ github.workspace }}
+            TestCaseDirs: ${{ github.event.inputs.BuilderUpdates_TestCaseDirs_Batch2 }}
+            AZURE_IP_ADDRESS: ${{ github.event.inputs.Azure_IP_Address || '153.81.237.136' }}
+            BUILDER_UPDATES_CLONE_BRANCH: ${{ github.event.inputs.BuilderUpdates_Clone_Branch || 'master' }}
+            BUILDER_UPDATES_RUNBATFILE: ${{ github.event.inputs.BuilderUpdates_RunBatFile || 'CallAntScript.bat'}}
+            BUILDER_UPDATES_TESTSUITE: ${{ github.event.inputs.BuilderUpdates_TestSuiteName || 'Execute_TestSuite'}}
+        steps:
+            - name: Set TestCaseDirs for push events
+              run: |
+                $TestCaseDirs = "$env:TestCaseDirs"
+                # Set default TestCaseDirs if not provided (for push events)
+                if ([string]::IsNullOrEmpty($TestCaseDirs)) {
+                  $defaultDir = "Functional\Reference Project\Reference Modified Flow\Cash Deposit ITR\BuilderUpdates.robot,
+                                 Functional\Reference Project\Reference Modified Flow\Contactless and EMV\EMVAppSelection.robot,
+                                 Functional\Reference Project\Reference Modified Flow\Contactless and EMV\EMVAutoAppLangSelection.robot,
+                                 Functional\Reference Project\Reference Modified Flow\Contactless and EMV\MultiAppManualLang.robot,
+                                 Functional\Reference Project\Reference Modified Flow\Contactless and EMV\SingleAppManualLang.robot,
+                                 Functional\Reference Project\Reference Modified Flow\Contactless and EMV\ValidateChipErrors.robot"
+                  Add-Content -Path $env:GITHUB_ENV -Value "TestCaseDirs<<EOF"
+                  Add-Content -Path $env:GITHUB_ENV -Value $defaultDir
+                  Add-Content -Path $env:GITHUB_ENV -Value "EOF"
+                  echo "${{ env.TestCaseDirs }}"
+                } else {
+                  echo "TestCaseDirs=$TestCaseDirs"  >> $env:GITHUB_ENV
+                }
+            
+            - name: Parse the TestcaseDirs (save as multiline env)
+              shell: pwsh
+              run: |
+                # Convert comma-separated list into newline-separated list
+                $testCaseDirs = "${{ env.TestCaseDirs }}" -split '\s*,\s*' -join "`n"
+                # Save MULTILINE value into GITHUB_ENV (this is the supported format)
+                "TestCaseDirs<<EOF" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                $testCaseDirs       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                "EOF"               | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            - name: Print TestCaseDirs
+              run: |
+                echo "=== TestCaseDirs Environment Variable Content ==="
+                echo "${{ env.TestCaseDirs }}"
+            - name: Print IP Address
+              run: |
+                echo "Azure IP Address: ${{ env.AZURE_IP_ADDRESS }}"
+            - name: Checkout Repository
+              uses: actions/checkout@v4
+              with:
+                ref: ${{ env.BUILDER_UPDATES_CLONE_BRANCH }}
+      
+            - name: Print Workspace
+              run: |
+                echo "Workspace: ${{ github.workspace }}"
+            - name: Set BASEDIR for Ant
+              shell: pwsh
+              run: |
+                "BASEDIR=${{ env.WORKSPACE}}" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            - name: Run Reference Test Suite
+              shell: cmd
+              run: |
+                cd  /d "%BASEDIR%\Configuration\Build-Scripts"
+                .\"${{ env.BUILDER_UPDATES_RUNBATFILE }}" ""${{ env.BUILDER_UPDATES_TESTSUITE }}"" ""${{ env.AZURE_IP_ADDRESS }}"" "NDCeHost" "False"
+            - name: Post counts as annotation
+              shell: bash
+              run: |
+                # Inline Python to parse counts
+                python - << PY > counts.txt
+                import xml.etree.ElementTree as ET
+                import os
+                xml_path = os.path.join(os.environ.get("WORKSPACE", ""), "TestSuiteReport/output.xml")
+                root = ET.parse(xml_path).getroot()
+                
+                p = f = s = 0
+                for t in root.findall(".//test"):
+                    st = (t.find("status").get("status", "") or "").upper()
+                    if st == "PASS": p += 1
+                    elif st == "FAIL": f += 1
+                    elif st == "SKIP": s += 1
+                
+                print(f"{p} {f} {s}")
+                PY
+      
+                # Strip CR and read
+                read PASSED FAILED SKIPPED < <(tr -d '\r' < counts.txt)
+      
+                # Ensure numeric-only (extra safety)
+                PASSED=${PASSED//[^0-9]/}
+                FAILED=${FAILED//[^0-9]/}
+                SKIPPED=${SKIPPED//[^0-9]/}
+                
+                # # Read counts and emit annotation
+                # read PASSED FAILED SKIPPED < counts.txt
+                
+                TOTAL=$((PASSED+FAILED+SKIPPED))
+                SEV="notice"; [ "$FAILED" -gt 0 ] && SEV="error"
+                echo "::${SEV} title=NDCe BuilderUpdates_Batch2 Robot Test Totals::Total ${TOTAL} | ✅ Passed: ${PASSED} | ❌ Failed: ${FAILED} | ⚠️ Skipped: ${SKIPPED}"
+
+            - name: Upload Reports folder as artifact
+              uses: actions/upload-artifact@v4
+              with:
+                name: NDCe_BuilderUpdates_Batch2-Reports
+                path: ${{ env.WORKSPACE }}\TestSuiteReport
+
+    
